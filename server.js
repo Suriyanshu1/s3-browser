@@ -167,27 +167,40 @@ app.get('/api/list', requireAuth, async (req, res) => {
   const safePrefix = prefix.replace(/\.\.\//g, '').replace(/^\//, '');
 
   try {
-    const response = await s3.send(new ListObjectsV2Command({
-      Bucket: BUCKET,
-      Prefix: safePrefix,
-      Delimiter: '/',
-    }));
+    const folders = [];
+    const files = [];
+    let continuationToken;
 
-    const folders = (response.CommonPrefixes || []).map((cp) => ({
-      type: 'folder',
-      name: cp.Prefix.slice(safePrefix.length).replace(/\/$/, ''),
-      prefix: cp.Prefix,
-    }));
-
-    const files = (response.Contents || [])
-      .filter((obj) => obj.Key !== safePrefix)
-      .map((obj) => ({
-        type: 'file',
-        name: obj.Key.slice(safePrefix.length),
-        key: obj.Key,
-        size: obj.Size,
-        lastModified: obj.LastModified,
+    do {
+      const response = await s3.send(new ListObjectsV2Command({
+        Bucket: BUCKET,
+        Prefix: safePrefix,
+        Delimiter: '/',
+        ContinuationToken: continuationToken,
       }));
+
+      (response.CommonPrefixes || []).forEach((cp) => {
+        folders.push({
+          type: 'folder',
+          name: cp.Prefix.slice(safePrefix.length).replace(/\/$/, ''),
+          prefix: cp.Prefix,
+        });
+      });
+
+      (response.Contents || [])
+        .filter((obj) => obj.Key !== safePrefix)
+        .forEach((obj) => {
+          files.push({
+            type: 'file',
+            name: obj.Key.slice(safePrefix.length),
+            key: obj.Key,
+            size: obj.Size,
+            lastModified: obj.LastModified,
+          });
+        });
+
+      continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+    } while (continuationToken);
 
     res.json({ folders, files, prefix: safePrefix });
   } catch (err) {
@@ -219,6 +232,47 @@ app.get('/api/download', requireAuth, async (req, res) => {
       return res.status(404).json({ error: 'File not found.' });
     }
     res.status(500).json({ error: 'Failed to generate download link.' });
+  }
+});
+
+app.get('/api/search', requireAuth, async (req, res) => {
+  const prefix = (req.query.prefix || '').replace(/\.\.\//g, '').replace(/^\//, '');
+  const query = (req.query.query || '').toLowerCase();
+
+  if (!query) return res.status(400).json({ error: 'Missing query parameter.' });
+
+  try {
+    const allObjects = [];
+    let continuationToken;
+
+    do {
+      const response = await s3.send(new ListObjectsV2Command({
+        Bucket: BUCKET,
+        Prefix: prefix,
+        ContinuationToken: continuationToken,
+      }));
+
+      if (response.Contents) allObjects.push(...response.Contents);
+      continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
+    } while (continuationToken);
+
+    const files = allObjects
+      .filter((obj) => {
+        const filename = obj.Key.split('/').pop();
+        return filename && filename.toLowerCase().includes(query);
+      })
+      .map((obj) => ({
+        type: 'file',
+        name: obj.Key.split('/').pop(),
+        key: obj.Key,
+        size: obj.Size,
+        lastModified: obj.LastModified,
+      }));
+
+    res.json({ files });
+  } catch (err) {
+    console.error('Search error:', err.message);
+    res.status(500).json({ error: 'Failed to search bucket contents.' });
   }
 });
 

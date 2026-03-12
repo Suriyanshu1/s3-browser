@@ -38,6 +38,176 @@ document.getElementById('btn-logout').addEventListener('click', () => {
   window.location.replace('/login.html');
 });
 
+// ===== Pagination State =====
+let currentPage = 1;
+let pageSize = 100;
+let allItems = []; // flat list: folders first, then files
+
+const paginationEl = document.getElementById('pagination');
+const btnPrev = document.getElementById('btn-prev');
+const btnNext = document.getElementById('btn-next');
+const pageIndicator = document.getElementById('page-indicator');
+const pageSizeSelect = document.getElementById('page-size-select');
+
+btnPrev.addEventListener('click', () => { if (currentPage > 1) { currentPage--; renderCurrentPage(); } });
+btnNext.addEventListener('click', () => { if (currentPage < totalPages()) { currentPage++; renderCurrentPage(); } });
+pageSizeSelect.addEventListener('change', () => {
+  pageSize = parseInt(pageSizeSelect.value, 10);
+  currentPage = 1;
+  renderCurrentPage();
+});
+
+function totalPages() {
+  return Math.max(1, Math.ceil(allItems.length / pageSize));
+}
+
+// ===== Multi-select State =====
+let selectedKeys = new Set();
+
+const selectAllCheckbox = document.getElementById('select-all');
+const selectionBar = document.getElementById('selection-bar');
+const selectionCount = document.getElementById('selection-count');
+const btnDownloadSelected = document.getElementById('btn-download-selected');
+const btnClearSelection = document.getElementById('btn-clear-selection');
+
+selectAllCheckbox.addEventListener('change', () => {
+  const pageItems = getPageItems();
+  const fileItems = pageItems.filter((item) => item.type === 'file');
+  if (selectAllCheckbox.checked) {
+    fileItems.forEach((f) => selectedKeys.add(f.key));
+  } else {
+    fileItems.forEach((f) => selectedKeys.delete(f.key));
+  }
+  syncCheckboxes();
+  updateSelectionBar();
+});
+
+btnClearSelection.addEventListener('click', clearSelection);
+btnDownloadSelected.addEventListener('click', downloadSelected);
+
+function clearSelection() {
+  selectedKeys.clear();
+  selectAllCheckbox.checked = false;
+  syncCheckboxes();
+  updateSelectionBar();
+}
+
+function syncCheckboxes() {
+  document.querySelectorAll('#file-list .file-checkbox').forEach((cb) => {
+    cb.checked = selectedKeys.has(cb.dataset.key);
+  });
+  // Update select-all state
+  const pageItems = getPageItems();
+  const pageFiles = pageItems.filter((item) => item.type === 'file');
+  if (pageFiles.length === 0) {
+    selectAllCheckbox.checked = false;
+    selectAllCheckbox.indeterminate = false;
+  } else {
+    const checkedCount = pageFiles.filter((f) => selectedKeys.has(f.key)).length;
+    selectAllCheckbox.checked = checkedCount === pageFiles.length;
+    selectAllCheckbox.indeterminate = checkedCount > 0 && checkedCount < pageFiles.length;
+  }
+}
+
+function updateSelectionBar() {
+  const count = selectedKeys.size;
+  if (count === 0) {
+    selectionBar.classList.add('hidden');
+  } else {
+    selectionBar.classList.remove('hidden');
+    selectionCount.textContent = `${count} file${count !== 1 ? 's' : ''} selected`;
+  }
+}
+
+async function downloadSelected() {
+  const keys = Array.from(selectedKeys);
+  btnDownloadSelected.disabled = true;
+  btnDownloadSelected.textContent = 'Downloading...';
+
+  for (let i = 0; i < keys.length; i++) {
+    try {
+      const res = await authFetch(`/api/download?key=${encodeURIComponent(keys[i])}`);
+      if (!res.ok) throw new Error(`Server error ${res.status}`);
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+
+      const a = document.createElement('a');
+      a.href = data.url;
+      a.download = keys[i].split('/').pop();
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+
+      // Small delay between downloads to avoid popup blockers
+      if (i < keys.length - 1) {
+        await new Promise((r) => setTimeout(r, 500));
+      }
+    } catch (err) {
+      alert(`Download failed for ${keys[i].split('/').pop()}: ${err.message}`);
+    }
+  }
+
+  btnDownloadSelected.disabled = false;
+  btnDownloadSelected.textContent = 'Download selected';
+}
+
+// ===== Search =====
+const searchInput = document.getElementById('search-input');
+const btnSearch = document.getElementById('btn-search');
+const searchHeading = document.getElementById('search-heading');
+const searchHeadingText = document.getElementById('search-heading-text');
+const btnClearSearch = document.getElementById('btn-clear-search');
+let isSearchMode = false;
+
+btnSearch.addEventListener('click', performSearch);
+searchInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') performSearch();
+});
+btnClearSearch.addEventListener('click', clearSearch);
+
+async function performSearch() {
+  const query = searchInput.value.trim();
+  if (!query) return;
+
+  isSearchMode = true;
+  clearSelection();
+  showState('loading');
+
+  try {
+    const res = await authFetch(`/api/search?prefix=${encodeURIComponent(currentPrefix)}&query=${encodeURIComponent(query)}`);
+    if (!res.ok) throw new Error(`Server error ${res.status}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+
+    searchHeadingText.textContent = `Search results for: "${query}"`;
+    searchHeading.classList.remove('hidden');
+
+    if (data.files.length === 0) {
+      allItems = [];
+      showState('empty');
+      updateFooter(0);
+      hidePagination();
+      return;
+    }
+
+    allItems = data.files; // search returns only files
+    currentPage = 1;
+    showState('list');
+    renderCurrentPage();
+    updateFooter(data.files.length);
+    updateCheckboxVisibility();
+  } catch (err) {
+    showError(err.message || 'Search failed.');
+  }
+}
+
+function clearSearch() {
+  isSearchMode = false;
+  searchInput.value = '';
+  searchHeading.classList.add('hidden');
+  loadDirectory(currentPrefix);
+}
+
 // ===== State =====
 let currentPrefix = '';
 
@@ -57,6 +227,9 @@ async function init() {
 // ===== Directory loading =====
 async function loadDirectory(prefix) {
   currentPrefix = prefix;
+  isSearchMode = false;
+  searchHeading.classList.add('hidden');
+  clearSelection();
   showState('loading');
 
   try {
@@ -72,24 +245,74 @@ async function loadDirectory(prefix) {
 
 // ===== Render =====
 function renderFiles({ folders, files, prefix }) {
-  const list = document.getElementById('file-list');
-  list.innerHTML = '';
-
   const total = folders.length + files.length;
 
   if (total === 0) {
+    allItems = [];
     showState('empty');
     updateFooter(0);
+    hidePagination();
     return;
   }
 
+  // Build flat list: folders first, then files
+  allItems = [...folders, ...files];
+  currentPage = 1;
+
   showState('list');
-
-  folders.forEach((folder) => list.appendChild(createFolderRow(folder)));
-  files.forEach((file) => list.appendChild(createFileRow(file)));
-
+  renderCurrentPage();
   updateFooter(total);
   updateBreadcrumb(prefix);
+}
+
+function getPageItems() {
+  const start = (currentPage - 1) * pageSize;
+  return allItems.slice(start, start + pageSize);
+}
+
+function renderCurrentPage() {
+  const list = document.getElementById('file-list');
+  list.innerHTML = '';
+
+  const pageItems = getPageItems();
+  pageItems.forEach((item) => {
+    if (item.type === 'folder') {
+      list.appendChild(createFolderRow(item));
+    } else {
+      list.appendChild(createFileRow(item));
+    }
+  });
+
+  updatePagination();
+  syncCheckboxes();
+  updateCheckboxVisibility();
+}
+
+function updatePagination() {
+  const tp = totalPages();
+  if (tp <= 1) {
+    hidePagination();
+    return;
+  }
+  paginationEl.classList.remove('hidden');
+  pageIndicator.textContent = `Page ${currentPage} of ${tp}`;
+  btnPrev.disabled = currentPage <= 1;
+  btnNext.disabled = currentPage >= tp;
+}
+
+function updateCheckboxVisibility() {
+  const hasFiles = allItems.some((item) => item.type === 'file');
+  const panel = document.getElementById('panel');
+  if (hasFiles) {
+    panel.classList.remove('no-files');
+  } else {
+    panel.classList.add('no-files');
+    clearSelection();
+  }
+}
+
+function hidePagination() {
+  paginationEl.classList.add('hidden');
 }
 
 function createFolderRow(folder) {
@@ -100,6 +323,7 @@ function createFolderRow(folder) {
   row.setAttribute('aria-label', `Open folder ${folder.name}`);
 
   row.innerHTML = `
+    <span class="file-checkbox-wrap"></span>
     <div class="cell-name">
       <div class="file-icon is-folder">${folderSvg()}</div>
       <span class="file-name">${escHtml(folder.name)}</span>
@@ -109,8 +333,8 @@ function createFolderRow(folder) {
         </svg>
       </div>
     </div>
-    <span class="cell-size">—</span>
-    <span class="cell-date">—</span>
+    <span class="cell-size">&mdash;</span>
+    <span class="cell-date">&mdash;</span>
     <span class="cell-action"></span>
   `;
 
@@ -130,6 +354,9 @@ function createFileRow(file) {
   const ext = getExtension(file.name);
 
   row.innerHTML = `
+    <span class="file-checkbox-wrap">
+      <input type="checkbox" class="file-checkbox" data-key="${escHtml(file.key)}" />
+    </span>
     <div class="cell-name">
       <div class="file-icon">${getFileIconSvg(ext)}</div>
       <span class="file-name" title="${escHtml(file.name)}">${escHtml(file.name)}</span>
@@ -143,6 +370,20 @@ function createFileRow(file) {
     </div>
   `;
 
+  const cb = row.querySelector('.file-checkbox');
+  if (selectedKeys.has(file.key)) cb.checked = true;
+  cb.addEventListener('change', (e) => {
+    e.stopPropagation();
+    if (cb.checked) {
+      selectedKeys.add(file.key);
+    } else {
+      selectedKeys.delete(file.key);
+    }
+    syncCheckboxes();
+    updateSelectionBar();
+  });
+  cb.addEventListener('click', (e) => e.stopPropagation());
+
   row.querySelector('.btn-download').addEventListener('click', (e) => {
     e.stopPropagation();
     triggerDownload(file.key, e.currentTarget);
@@ -154,7 +395,7 @@ function createFileRow(file) {
 // ===== Download =====
 async function triggerDownload(key, btn) {
   btn.classList.add('loading');
-  btn.innerHTML = `${spinnerInline()} Preparing…`;
+  btn.innerHTML = `${spinnerInline()} Preparing\u2026`;
 
   try {
     const res = await authFetch(`/api/download?key=${encodeURIComponent(key)}`);
@@ -210,6 +451,8 @@ function showState(state) {
   document.getElementById('empty-state').classList.toggle('hidden', state !== 'empty');
   document.getElementById('error-state').classList.toggle('hidden', state !== 'error');
   document.getElementById('loading-state').classList.toggle('hidden', state !== 'loading');
+  // Pagination should only show when state is 'list' and there are multiple pages
+  if (state !== 'list') hidePagination();
 }
 
 function showError(msg) {
@@ -237,7 +480,7 @@ function formatSize(bytes) {
 }
 
 function formatDate(iso) {
-  if (!iso) return '—';
+  if (!iso) return '\u2014';
   return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 

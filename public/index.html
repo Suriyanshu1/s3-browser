@@ -62,9 +62,24 @@
         </ol>
       </nav>
 
+      <!-- Search bar -->
+      <div class="search-bar" id="search-bar">
+        <input type="text" id="search-input" class="search-input" placeholder="Search files..." />
+        <button class="btn-search" id="btn-search">Search</button>
+      </div>
+
+      <!-- Search results heading -->
+      <div class="search-heading hidden" id="search-heading">
+        <span id="search-heading-text"></span>
+        <button class="btn-clear-search" id="btn-clear-search">Clear search</button>
+      </div>
+
       <!-- File list container -->
       <div class="panel" id="panel">
         <div class="panel-header">
+          <label class="select-all-wrap">
+            <input type="checkbox" id="select-all" class="file-checkbox" />
+          </label>
           <span class="col-name">Name</span>
           <span class="col-size">Size</span>
           <span class="col-date">Modified</span>
@@ -73,6 +88,25 @@
         <div id="file-list" class="file-list">
           <!-- Populated by JS -->
         </div>
+      </div>
+
+      <!-- Pagination controls -->
+      <div class="pagination hidden" id="pagination">
+        <button class="btn-page" id="btn-prev">Previous</button>
+        <span class="page-indicator" id="page-indicator">Page 1 of 1</span>
+        <button class="btn-page" id="btn-next">Next</button>
+        <select class="page-size-select" id="page-size-select">
+          <option value="50">50 / page</option>
+          <option value="100" selected>100 / page</option>
+          <option value="200">200 / page</option>
+        </select>
+      </div>
+
+      <!-- Floating action bar for multi-select -->
+      <div class="selection-bar hidden" id="selection-bar">
+        <span id="selection-count">0 files selected</span>
+        <button class="btn-download-selected" id="btn-download-selected">Download selected</button>
+        <button class="btn-clear-selection" id="btn-clear-selection">Clear selection</button>
       </div>
 
       <!-- Empty state -->
