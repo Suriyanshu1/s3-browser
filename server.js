@@ -172,32 +172,29 @@ app.get('/api/list', requireAuth, async (req, res) => {
     let continuationToken;
 
     do {
-      const response = await s3.send(new ListObjectsV2Command({
-        Bucket: BUCKET,
-        Prefix: safePrefix,
-        Delimiter: '/',
-        ContinuationToken: continuationToken,
-      }));
+      const params = { Bucket: BUCKET, Prefix: safePrefix, Delimiter: '/' };
+      if (continuationToken) params.ContinuationToken = continuationToken;
 
-      (response.CommonPrefixes || []).forEach((cp) => {
+      const response = await s3.send(new ListObjectsV2Command(params));
+
+      for (const cp of (response.CommonPrefixes || [])) {
         folders.push({
           type: 'folder',
           name: cp.Prefix.slice(safePrefix.length).replace(/\/$/, ''),
           prefix: cp.Prefix,
         });
-      });
+      }
 
-      (response.Contents || [])
-        .filter((obj) => obj.Key !== safePrefix)
-        .forEach((obj) => {
-          files.push({
-            type: 'file',
-            name: obj.Key.slice(safePrefix.length),
-            key: obj.Key,
-            size: obj.Size,
-            lastModified: obj.LastModified,
-          });
+      for (const obj of (response.Contents || [])) {
+        if (obj.Key === safePrefix) continue;
+        files.push({
+          type: 'file',
+          name: obj.Key.slice(safePrefix.length),
+          key: obj.Key,
+          size: obj.Size,
+          lastModified: obj.LastModified,
         });
+      }
 
       continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
     } while (continuationToken);
@@ -246,12 +243,10 @@ app.get('/api/search', requireAuth, async (req, res) => {
     let continuationToken;
 
     do {
-      const response = await s3.send(new ListObjectsV2Command({
-        Bucket: BUCKET,
-        Prefix: prefix,
-        ContinuationToken: continuationToken,
-      }));
+      const params = { Bucket: BUCKET, Prefix: prefix };
+      if (continuationToken) params.ContinuationToken = continuationToken;
 
+      const response = await s3.send(new ListObjectsV2Command(params));
       if (response.Contents) allObjects.push(...response.Contents);
       continuationToken = response.IsTruncated ? response.NextContinuationToken : undefined;
     } while (continuationToken);
