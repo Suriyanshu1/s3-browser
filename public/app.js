@@ -12,6 +12,8 @@ function authFetch(url) {
     if (res.status === 401) {
       sessionStorage.removeItem('auth_token');
       window.location.replace('/login.html');
+    } else {
+      document.body.style.display = 'initial';
     }
     return res;
   });
